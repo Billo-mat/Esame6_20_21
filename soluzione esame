@@ -1,0 +1,125 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import pymc3 as pm
+import arviz as az
+from itertools import product
+
+# ### Exercise 1
+# Lettura del genoma dal file FASTA (saltando la prima riga di commento)
+genome: str = ""
+with open('nc_051526_1.fasta', 'r') as f:
+    for line in f:
+        if not line.startswith('>'):
+            genome += line.strip()
+
+# ### Exercise 2
+# Calcolo dei tripletti possibili considerando un tripletto e il suo inverso come lo stesso
+letters = sorted(list(set(genome)))
+all_combinations = [''.join(p) for p in product(letters, repeat=3)]
+
+possible_triplets_set = set()
+for t in all_combinations:
+    rev = t[::-1]
+    # Inseriamo solo la versione "canonica" (quella lessicograficamente minore)
+    if t <= rev:
+        possible_triplets_set.add(t)
+    else:
+        possible_triplets_set.add(rev)
+
+possible_triplets = sorted(list(possible_triplets_set))
+
+# ### Exercise 3
+# Funzione per contare le occorrenze (anche sovrapposte) di un tripletto o del suo inverso
+def count_triplet_occurrences(s: str, t: str) -> int:
+    """
+    Returns the number of occurrences of the triplet t or its reverse in the string s.
+    
+    >>> count_triplet_occurrences('CAATAATCC', 'AAT')
+    3
+    >>> count_triplet_occurrences('AAAAAAA', 'AAA')
+    5
+    """
+    rev = t[::-1]
+    count = 0
+    # Scansione a finestra mobile (overlapping)
+    for i in range(len(s) - 2):
+        sub = s[i:i+3]
+        if sub == t:
+            count += 1
+        elif sub == rev and t != rev:
+            # Se il tripletto non è palindromo, contiamo anche l'inverso
+            count += 1
+    return count
+
+# Esecuzione doctest per verifica
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
+
+# ### Exercise 4
+# Definizione del DataFrame con le occorrenze
+counts = [count_triplet_occurrences(genome, t) for t in possible_triplets]
+df = pd.DataFrame({'occurrences': counts}, index=possible_triplets)
+
+# Verifica richiesta: AAA dovrebbe avere 446 occorrenze
+# print(df.loc['AAA'])
+
+# ### Exercise 5
+# Aggiunta colonna booleana per la parità
+df['is_even'] = df['occurrences'] % 2 == 0
+
+# ### Exercise 6
+# Plot degli istogrammi (orientati orizzontalmente per inserire le medie come linee orizzontali)
+even_triplets = df[df['is_even']]['occurrences']
+odd_triplets = df[~df['is_even']]['occurrences']
+
+mean_even = even_triplets.mean()
+mean_odd = odd_triplets.mean()
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+
+ax[0].hist(even_triplets, orientation='horizontal', bins=10, color='skyblue', edgecolor='black')
+ax[0].axhline(mean_even, color='red', linestyle='--', label=f'Mean: {mean_even:.2f}')
+ax[0].set_title('Even Triplets Occurrences')
+ax[0].set_xlabel('Frequency')
+ax[0].set_ylabel('Number of Occurrences')
+ax[0].legend()
+
+ax[1].hist(odd_triplets, orientation='horizontal', bins=10, color='salmon', edgecolor='black')
+ax[1].axhline(mean_odd, color='blue', linestyle='--', label=f'Mean: {mean_odd:.2f}')
+ax[1].set_title('Odd Triplets Occurrences')
+ax[1].set_xlabel('Frequency')
+ax[1].legend()
+
+plt.tight_layout()
+plt.show()
+
+# ### Exercise 7
+# Standardizzazione delle occorrenze
+occ_mean = df['occurrences'].mean()
+occ_std = df['occurrences'].std()
+df['standardized'] = (df['occurrences'] - occ_mean) / occ_std
+
+print(f"Mean of standardized: {df['standardized'].mean():.4f} (should be approx 0)")
+print(f"Std of standardized: {df['standardized'].std():.4f} (should be approx 1)")
+
+# ### Exercise 8
+# Modello statistico con PyMC3
+with pm.Model() as model:
+    # Prior per le medie (Normali con mean 0 e std 2)
+    mu_even = pm.Normal('mu_even', mu=0, sd=2)
+    mu_odd = pm.Normal('mu_odd', mu=0, sd=2)
+    
+    # Likelihood (Normali con std 1)
+    obs_even = pm.Normal('obs_even', mu=mu_even, sd=1, 
+                         observed=df[df['is_even']]['standardized'].values)
+    obs_odd = pm.Normal('obs_odd', mu=mu_odd, sd=1, 
+                        observed=df[~df['is_even']]['standardized'].values)
+    
+    # Campionamento
+    trace = pm.sample(1000, return_inferencedata=True, tune=1000)
+
+# Plot dei risultati del modello
+az.plot_posterior(trace)
+plt.show()
